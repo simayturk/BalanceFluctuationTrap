@@ -162,14 +162,14 @@ forge create \
 
 - `collect()` – retrieves the current ETH balance of the monitored wallet.  
 - `shouldRespond()` – checks if the balance change is **≥ 0.3%** and returns `true` if triggered.  
-- `LogAlertReceiver.logAnomaly()` – logs anomaly events that can be monitored externally.
+- `LogAlertReceiver.react()` – logs anomaly events that can be monitored externally.
 
 Example:
 
 ```solidity
 (bool triggered, bytes memory message) = trap.shouldRespond(data);
 if (triggered) {
-    logReceiver.logAnomaly("Balance fluctuation >= 0.3% detected");
+    logReceiver.react("Balance fluctuation >= 0.3% detected");
 }
 ```
 
