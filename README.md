@@ -32,51 +32,48 @@ This repository contains two Solidity smart contracts designed for monitoring ET
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-interface ITrap {
-    function collect() external returns (bytes memory);
-    function shouldRespond(bytes[] calldata data) external view returns (bool, bytes memory);
-}
+import {ITrap} from "drosera-contracts/interfaces/ITrap.sol";
 
 contract BalanceFluctuationTrap is ITrap {
-    /// @notice Wallet address to monitor
-    address public constant target = 0xABcDEF1234567890abCDef1234567890AbcDeF12; 
-    /// @notice Sensitivity threshold in thousandths of a percent (0.3% = 30 thousandths)
-    uint256 public constant thresholdMilliPercent = 30; // 0.3%
+    /// Wallet to monitor
+    address public constant TARGET = 0xABcDEF1234567890abCDef1234567890AbcDeF12;
 
-    /**
-     * @dev Collects the current ETH balance of the target wallet
-     */
-    function collect() external view override returns (bytes memory) {
-        return abi.encode(target.balance);
+    /// Threshold in 0.001% units (bps/10). 0.3% = 300
+    uint256 public constant THRESHOLD_MILLI_PERCENT = 300;
+
+    /// Optional guards to avoid noise
+    uint256 public constant MIN_PREV_WEI = 0;      // set e.g. 0.1 ether if needed
+    uint256 public constant MIN_ABS_DIFF = 0;      // set e.g. 0.01 ether if needed
+
+    function collect() external view returns (bytes memory) {
+        return abi.encode(TARGET, TARGET.balance, block.number);
     }
 
-    /**
-     * @dev Checks whether the balance change exceeds the 0.3% threshold
-     */
-    function shouldRespond(bytes[] calldata data) external pure override returns (bool, bytes memory) {
-        if (data.length < 2) return (false, "Insufficient data");
+    function shouldRespond(bytes[] calldata data) external pure returns (bool, bytes memory) {
+        if (data.length < 2) return (false, "");
 
-        uint256 current = abi.decode(data[0], (uint256));
-        uint256 previous = abi.decode(data[1], (uint256));
+        (address t0, uint256 curr, uint256 bn0) = abi.decode(data[0], (address, uint256, uint256));
+        (address t1, uint256 prev, uint256 bn1) = abi.decode(data[1], (address, uint256, uint256));
 
-        // Prevent division by zero
-        if (previous == 0) {
-            if (current > 0) return (true, abi.encode("Balance changed from 0"));
-            else return (false, "");
-        }
+        if (t0 != t1) return (false, "");                // sanity: same target
+        if (prev <= MIN_PREV_WEI) return (false, "");    // optional dust guard
+        uint256 diff = curr > prev ? curr - prev : prev - curr;
+        if (diff < MIN_ABS_DIFF) return (false, "");
 
-        uint256 diff = current > previous ? current - previous : previous - current;
+        // 0.001% precision
+        uint256 milliPct = (diff * 100_000) / prev;
+        if (milliPct < THRESHOLD_MILLI_PERCENT) return (false, "");
 
-        // Using 100_000 for precision down to 0.001%
-        uint256 milliPercent = (diff * 100_000) / previous;
-
-        if (milliPercent >= thresholdMilliPercent) {
-            return (true, abi.encode("Balance fluctuation >= 0.3% detected"));
-        }
-
-        return (false, "");
+        // reason: 0 = DROP, 1 = SPIKE
+        uint8 reason = curr < prev ? 0 : 1;
+        bytes memory payload = abi.encode(
+            reason, t0, prev, curr, diff, milliPct, bn1, bn0
+        );
+        return (true, payload);
     }
 }
+
+
 ```
 
 ---
@@ -88,12 +85,35 @@ contract BalanceFluctuationTrap is ITrap {
 pragma solidity ^0.8.20;
 
 contract LogAlertReceiver {
-    event Alert(string message);
+    // reason: 0 = DROP, 1 = SPIKE
+    event Alert(
+        uint8 indexed reason,
+        address indexed target,
+        uint256 previous,
+        uint256 current,
+        uint256 diff,
+        uint256 milliPercent,
+        uint256 blockPrev,
+        uint256 blockCurr
+    );
 
-    function logAnomaly(string calldata message) external {
-        emit Alert(message);
+    // Configure this as the response function in drosera.toml: response_function = "react(bytes)"
+    function react(bytes calldata payload) external {
+        (
+            uint8 reason,
+            address target,
+            uint256 prev,
+            uint256 curr,
+            uint256 diff,
+            uint256 milliPct,
+            uint256 bnPrev,
+            uint256 bnCurr
+        ) = abi.decode(payload, (uint8, address, uint256, uint256, uint256, uint256, uint256, uint256));
+
+        emit Alert(reason, target, prev, curr, diff, milliPct, bnPrev, bnCurr);
     }
 }
+
 ```
 
 ---
